@@ -57,6 +57,7 @@ Everything ServiceDeck can start, stop, probe, or display lives in `services.jso
 ```
 
 - `exe` is resolved via PATH first, then used as an absolute path.
+- `start.window`: `"hidden"` (default — background service with redirected logs) or `"visible"` — for interactive tools (CLI agents, TUIs, GUI apps) that own their console/window; visible launches skip output redirection because the tool's own UI owns the session.
 - `start.env` (map of literal values) and `start.envFile` (path to a KEY=VALUE file, `#` comments and quoted values tolerated, `${ENV_VAR}` placeholders expanded) are applied to the child's environment before launch — use these instead of a wrapper script when a service needs `HOST`/`PORT`-style configuration.
 - stdout/stderr are redirected to `logs/<id>.stdout.log` / `<id>.stderr.log` (the names in `logs` must match these or point at files your service writes itself).
 - If the exe is a Python program, include `-u` in `args` so redirected logs stream immediately instead of sitting in the block buffer.

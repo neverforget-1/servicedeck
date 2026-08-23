@@ -50,6 +50,9 @@ for (const service of manifest.services || []) {
   if (caps.has('stop') && kind !== 'docker-compose' && kind !== 'ssh-tunnel' && !(service.stop && service.stop.matchCommandLine)) {
     problems.push(`${label}: stop capability requires stop.matchCommandLine (except docker-compose / ssh-tunnel)`);
   }
+  if (service.start && service.start.window !== undefined && !['hidden', 'visible'].includes(service.start.window)) {
+    problems.push(`${label}: start.window must be "hidden" or "visible"`);
+  }
   if (service.start && service.start.readyTimeoutSec !== undefined && !(Number.isInteger(service.start.readyTimeoutSec) && service.start.readyTimeoutSec > 0)) {
     problems.push(`${label}: start.readyTimeoutSec must be a positive integer`);
   }

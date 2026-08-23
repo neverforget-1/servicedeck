@@ -179,14 +179,15 @@ function Get-ProcessesByPattern {
     param([string]$Pattern, [string]$ExpectName)
     if (-not $Pattern) { return @() }
     $snapshot = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
-    # Leading comma defeats pipeline unrolling: without it a single match
-    # comes back as a bare object whose .Count is $null under PS 5.1.
-    $hits = @($snapshot | Where-Object {
+    # Plain return: the pipeline unrolls the array, so EVERY caller must
+    # collect with @(...). Counting directly on the call result breaks in
+    # PS 5.1 for single hits (bare object, .Count is $null), and -NoEnumerate
+    # or a comma prefix break the empty case (one wrapped array, Count 1).
+    @($snapshot | Where-Object {
         $_.CommandLine -and
         $_.CommandLine -match $Pattern -and
         (-not $ExpectName -or $_.Name -eq $ExpectName)
     })
-    return , $hits
 }
 
 # Find live processes owned by a service using its stop.matchCommandLine
@@ -220,6 +221,10 @@ function Start-ProcessService {
     $stdoutLog = Join-Path $LogRoot "$($Spec.id).stdout.log"
     $stderrLog = Join-Path $LogRoot "$($Spec.id).stderr.log"
     $label = "Service '$($Spec.id)'"
+    # Interactive tools (CLI agents, TUIs, GUI apps) declare
+    # start.window "visible": launched with a normal window and no output
+    # redirection, so their own console/UI owns the session.
+    $visibleWindow = ([string]$start.window -eq 'visible')
 
     # Optional environment for the child: start.env (literal map) plus
     # start.envFile (KEY=VALUE lines, '#' comments and quoted values
@@ -250,15 +255,21 @@ function Start-ProcessService {
     }
 
     Write-Info "Starting $label..."
-    # Unbuffered Python note: if the exe is python, '-u' should be supplied in
-    # the registry args so redirected logs stream immediately.
-    $process = Start-Process -FilePath $exe `
-        -ArgumentList $arguments `
-        -WorkingDirectory $cwd `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $stdoutLog `
-        -RedirectStandardError $stderrLog `
-        -PassThru
+    if ($visibleWindow) {
+        $process = Start-Process -FilePath $exe `
+            -ArgumentList $arguments `
+            -WorkingDirectory $cwd `
+            -PassThru
+    }
+    else {
+        $process = Start-Process -FilePath $exe `
+            -ArgumentList $arguments `
+            -WorkingDirectory $cwd `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $stdoutLog `
+            -RedirectStandardError $stderrLog `
+            -PassThru
+    }
 
     try {
         Wait-ServiceHealth $Spec (Get-ReadyTimeout $Spec) $label
