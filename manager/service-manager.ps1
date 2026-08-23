@@ -141,9 +141,10 @@ function Test-ServiceHealth {
         return $false
     }
     switch ([string]$health.type) {
-        'http' { return Test-HttpQuiet ([string](Expand-DeckPath $health.url)) }
-        'port' { return Test-PortListening ([int]$health.port) }
-        default { return Test-PortListening ([int]$Spec.port) }
+        'http'    { return Test-HttpQuiet ([string](Expand-DeckPath $health.url)) }
+        'port'    { return Test-PortListening ([int]$health.port) }
+        'process' { return (@(Get-ProcessesByPattern ([string]$health.matchCommandLine) $health.expectName)).Count -gt 0 }
+        default   { return Test-PortListening ([int]$Spec.port) }
     }
 }
 
@@ -171,20 +172,29 @@ function Stop-ProcessTree {
     & taskkill.exe /PID $ProcessId /T /F 2>$null | Out-Null
 }
 
+# Find live processes matching a command-line regex (and optional process
+# image name). Verification is by command line so the engine never touches a
+# process it cannot attribute to a service.
+function Get-ProcessesByPattern {
+    param([string]$Pattern, [string]$ExpectName)
+    if (-not $Pattern) { return @() }
+    $snapshot = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    # Leading comma defeats pipeline unrolling: without it a single match
+    # comes back as a bare object whose .Count is $null under PS 5.1.
+    $hits = @($snapshot | Where-Object {
+        $_.CommandLine -and
+        $_.CommandLine -match $Pattern -and
+        (-not $ExpectName -or $_.Name -eq $ExpectName)
+    })
+    return , $hits
+}
+
 # Find live processes owned by a service using its stop.matchCommandLine
-# pattern (and optional stop.expectName). Verification is by command line so
-# the engine never kills a process it cannot attribute to the service.
+# pattern (and optional stop.expectName).
 function Get-ServiceProcesses {
     param($Spec)
     if (-not $Spec.stop -or -not $Spec.stop.matchCommandLine) { return @() }
-    $pattern = [string]$Spec.stop.matchCommandLine
-    $expectName = $Spec.stop.expectName
-    $snapshot = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
-    return @($snapshot | Where-Object {
-        $_.CommandLine -and
-        $_.CommandLine -match $pattern -and
-        (-not $expectName -or $_.Name -eq $expectName)
-    })
+    return Get-ProcessesByPattern ([string]$Spec.stop.matchCommandLine) $Spec.stop.expectName
 }
 
 # ---------------------------------------------------------------- start kinds
@@ -210,6 +220,34 @@ function Start-ProcessService {
     $stdoutLog = Join-Path $LogRoot "$($Spec.id).stdout.log"
     $stderrLog = Join-Path $LogRoot "$($Spec.id).stderr.log"
     $label = "Service '$($Spec.id)'"
+
+    # Optional environment for the child: start.env (literal map) plus
+    # start.envFile (KEY=VALUE lines, '#' comments and quoted values
+    # tolerated). Applied to this action process only; Start-Process
+    # children inherit it.
+    if ($start.envFile) {
+        $envFilePath = Expand-DeckPath ([string]$start.envFile)
+        if (-not (Test-Path -LiteralPath $envFilePath)) {
+            throw "envFile for '$($Spec.id)' was not found: $envFilePath"
+        }
+        foreach ($line in [System.IO.File]::ReadAllLines($envFilePath)) {
+            $trimmed = $line.Trim()
+            if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+            $separator = $trimmed.IndexOf('=')
+            if ($separator -le 0) { continue }
+            $name = $trimmed.Substring(0, $separator).Trim()
+            $value = $trimmed.Substring($separator + 1).Trim()
+            if ($value.Length -ge 2 -and $value.StartsWith('"') -and $value.EndsWith('"')) {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+            Set-Item -Path ("Env:" + $name) -Value $value
+        }
+    }
+    if ($start.env) {
+        $start.env.PSObject.Properties | ForEach-Object {
+            Set-Item -Path ("Env:" + $_.Name) -Value ([string]$_.Value)
+        }
+    }
 
     Write-Info "Starting $label..."
     # Unbuffered Python note: if the exe is python, '-u' should be supplied in

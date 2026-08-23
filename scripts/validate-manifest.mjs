@@ -53,8 +53,11 @@ for (const service of manifest.services || []) {
   if (service.start && service.start.readyTimeoutSec !== undefined && !(Number.isInteger(service.start.readyTimeoutSec) && service.start.readyTimeoutSec > 0)) {
     problems.push(`${label}: start.readyTimeoutSec must be a positive integer`);
   }
-  if (service.health && service.health.type && !['http', 'port'].includes(service.health.type)) {
-    problems.push(`${label}: health.type must be "http" or "port"`);
+  if (service.health && service.health.type && !['http', 'port', 'process'].includes(service.health.type)) {
+    problems.push(`${label}: health.type must be "http", "port" or "process"`);
+  }
+  if (service.health && service.health.type === 'process' && !service.health.matchCommandLine) {
+    problems.push(`${label}: health.type "process" requires health.matchCommandLine`);
   }
   if (kind === 'ssh-tunnel' && !service.ssh) problems.push(`${label}: ssh-tunnel kind needs an "ssh" block`);
   if (kind === 'docker-compose' && !Array.isArray(service.composeFiles)) problems.push(`${label}: docker-compose kind needs composeFiles array`);

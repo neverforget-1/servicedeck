@@ -57,9 +57,10 @@ Everything ServiceDeck can start, stop, probe, or display lives in `services.jso
 ```
 
 - `exe` is resolved via PATH first, then used as an absolute path.
+- `start.env` (map of literal values) and `start.envFile` (path to a KEY=VALUE file, `#` comments and quoted values tolerated, `${ENV_VAR}` placeholders expanded) are applied to the child's environment before launch — use these instead of a wrapper script when a service needs `HOST`/`PORT`-style configuration.
 - stdout/stderr are redirected to `logs/<id>.stdout.log` / `<id>.stderr.log` (the names in `logs` must match these or point at files your service writes itself).
 - If the exe is a Python program, include `-u` in `args` so redirected logs stream immediately instead of sitting in the block buffer.
-- `health.type` is `http` (any 2xx–4xx counts as up) or `port` (a listener on that port counts as up). `readyTimeoutSec` bounds the start wait (default 60s — cold-starting runtimes like first-boot containers need more; be generous).
+- `health.type` is `http` (any 2xx–4xx counts as up), `port` (a listener on that port counts as up), or `process` (at least one live process matching `health.matchCommandLine` — for services with no HTTP/port surface, e.g. a gateway that only makes outbound connections). `readyTimeoutSec` bounds the start wait (default 60s — cold-starting runtimes like first-boot containers need more; be generous).
 - `stop.matchCommandLine` is a case-insensitive regex matched against the full command line; `expectName` additionally pins the process image name. The engine kills **only** processes matching both, then verifies the service is actually down.
 
 ## kind: docker-compose
