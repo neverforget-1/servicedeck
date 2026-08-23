@@ -19,6 +19,10 @@ Get-CimInstance Win32_Process | ? { $_.CommandLine -match '<agent-or-service>' }
 # What did the last deck operations do?
 curl http://127.0.0.1:8777/api/operations
 
+# Audit every health probe against the live process table
+# (flags wrong expectName, dead probes, over-broad patterns)
+powershell -File manager\service-manager.ps1 -Action probe-report
+
 # Tail the manager's own log and any service log
 Get-Content logs\manager.log -Tail 30
 Get-Content logs\<service-id>.stderr.log -Tail 30
@@ -150,13 +154,14 @@ list = `logs: []` in the registry, or filenames failing the
 
 ## 10. Registry edits don't show up in the dashboard
 
-**Root cause:** the server reads `services.json` once at boot; the
-manager re-reads it per action. So health/actions use your new registry,
-but cards/actions list come from the stale in-memory copy — confusing
-mixture.
-
-**Fix:** restart the dashboard after registry edits (hot reload is on
-the roadmap).
+**Fixed since v0.2.0:** `services.json` hot-reloads — the server watches the
+file and swaps the registry on valid changes (invalid half-saved files keep
+the previous registry running; check the server console for a "reload
+rejected" line). `GET /api/meta` exposes `registryLoadedAt` so you can
+verify the swap happened. **Bind host/port changes still require a
+restart** — they are frozen at boot by design. The manager re-reads the
+registry per action, so health checks always see the newest file even if
+the server somehow did not reload.
 
 ## 11. Agent terminal window closes (or stays) immediately after launch
 

@@ -22,7 +22,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidatePattern('^(status-json|start-common|stop-common|(start|stop)-[a-z0-9][a-z0-9-]{0,63})$')]
+    [ValidatePattern('^(status-json|probe-report|start-common|stop-common|(start|stop)-[a-z0-9][a-z0-9-]{0,63})$')]
     [string]$Action = 'status-json',
 
     [string]$ManifestPath,
@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 # with the same rules as the -Action parameter before use.
 if ($env:DECK_ACTION -and -not $PSBoundParameters.ContainsKey('Action')) {
     $envAction = [string]$env:DECK_ACTION
-    if ($envAction -notmatch '^(status-json|start-common|stop-common|(start|stop)-[a-z0-9][a-z0-9-]{0,63})$') {
+    if ($envAction -notmatch '^(status-json|probe-report|start-common|stop-common|(start|stop)-[a-z0-9][a-z0-9-]{0,63})$') {
         throw "Invalid DECK_ACTION value."
     }
     $Action = $envAction
@@ -55,8 +55,9 @@ if (-not (Test-Path -LiteralPath $ManifestPath)) {
 $Manifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $Global:DeckTitle = if ($Manifest.dashboard.title) { [string]$Manifest.dashboard.title } else { 'ServiceDeck' }
 
-# "status-json" output must be pure JSON on stdout; suppress human chatter.
-$Script:MachineMode = ($Action -eq 'status-json')
+# "status-json" and "probe-report" output must be pure JSON on stdout;
+# suppress human chatter.
+$Script:MachineMode = ($Action -in @('status-json', 'probe-report'))
 
 New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
 
@@ -504,11 +505,59 @@ function Get-StatusJson {
     } | ConvertTo-Json -Depth 5 -Compress
 }
 
+# ---------------------------------------------------------------- probe report
+
+# Maintenance action: audit every entry's health probe against the live
+# process table. For process probes, reports raw pattern hits (ignoring
+# expectName) next to final hits so a wrong expectName is immediately
+# visible — the "Claude Code is claude.exe, not node.exe" lesson in
+# machine-readable form. CLI-only; the dashboard never invokes it.
+function Get-ProbeReport {
+    $entries = @()
+    foreach ($spec in @($Manifest.services)) {
+        $notes = @()
+        $probe = [ordered]@{
+            id          = [string]$spec.id
+            kind        = [string]$spec.kind
+            healthType  = [string]$spec.health.type
+            state       = if (Test-Enabled $spec) { if (Test-ServiceHealth $spec) { 'ready' } else { 'stopped' } } else { 'disabled' }
+        }
+
+        if ($spec.health -and [string]$spec.health.type -eq 'process') {
+            $rawPattern = [string]$spec.health.matchCommandLine
+            $expectName = [string]$spec.health.expectName
+            $rawHits = @(Get-ProcessesByPattern $rawPattern $null)
+            $finalHits = @(Get-ProcessesByPattern $rawPattern $expectName)
+            $probe.rawHits = $rawHits.Count
+            $probe.rawHitNames = @($rawHits | Select-Object -First 5 | ForEach-Object { $_.Name })
+            $probe.finalHits = $finalHits.Count
+            if ($rawHits.Count -gt 0 -and $finalHits.Count -eq 0) {
+                $notes += "pattern matches $($rawHits.Count) process(es) named [$($probe.rawHitNames -join ', ')] but none match expectName '$expectName' — the real image name differs; update expectName from the observed names"
+            }
+            if ($rawHits.Count -eq 0 -and $probe.state -eq 'ready') {
+                $notes += 'state is ready but the pattern matches nothing — probe and state disagree; re-audit this entry'
+            }
+        }
+        elseif (-not $spec.health -and -not $spec.port) {
+            $notes += 'no health block and no port — this entry can never report ready'
+        }
+
+        $probe.notes = $notes
+        $entries += [pscustomobject]$probe
+    }
+
+    [ordered]@{
+        generatedAt = (Get-Date).ToString('o')
+        entries     = $entries
+    } | ConvertTo-Json -Depth 6
+}
+
 # ---------------------------------------------------------------- dispatch
 
 try {
     switch -Regex ($Action) {
         '^status-json$'   { Get-StatusJson }
+        '^probe-report$'  { Get-ProbeReport }
         '^start-common$'  { foreach ($spec in @($Manifest.services)) { if ($spec.common -and (Test-Enabled $spec) -and (Get-Capabilities $spec) -contains 'start') { Start-ServiceById ([string]$spec.id) } } }
         '^stop-common$'   { foreach ($spec in @($Manifest.services)) { if ($spec.common -and (Get-Capabilities $spec) -contains 'stop') { Stop-ServiceById ([string]$spec.id) } } }
         '^(start)-(.+)$'  { Start-ServiceById ($Matches[2]) }

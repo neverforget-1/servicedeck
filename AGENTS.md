@@ -66,7 +66,12 @@ node --check server.js; node --check public/app.js       # syntax
 node scripts/validate-manifest.mjs services.example.json # schema
 $env:SERVICEDECK_PORT = '8791'; node server.js           # boot on a test port
 curl http://127.0.0.1:8791/api/health                    # expect {"ok":true,...}
+powershell -File manager\service-manager.ps1 -Action probe-report  # audit every health probe
 ```
+
+The registry hot-reloads: editing `services.json` swaps the server's view
+within ~300ms (invalid files keep the previous registry; watch the server
+console). Bind host/port still freeze at boot.
 
 Full lifecycle test (run before claiming anything works):
 

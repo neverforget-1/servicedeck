@@ -40,13 +40,74 @@ if (!fs.existsSync(MANIFEST_FILE) && fs.existsSync(EXAMPLE_FILE)) {
   console.log('[deck] Edit services.json to register your own services (it is gitignored).');
 }
 
-const manifest = JSON.parse(fs.readFileSync(MANIFEST_FILE, 'utf8'));
-if (!manifest || !Array.isArray(manifest.services)) {
-  throw new Error('services.json is invalid: expected a top-level "services" array.');
+// Build the registry view (manifest + service map + derived action map).
+// Extracted so the dashboard can hot-reload services.json; boot-time
+// settings (bind host, port) intentionally stay frozen from first load.
+function loadRegistry() {
+  const raw = JSON.parse(fs.readFileSync(MANIFEST_FILE, 'utf8'));
+  if (!raw || !Array.isArray(raw.services)) {
+    throw new Error('services.json is invalid: expected a top-level "services" array.');
+  }
+  const svcs = new Map();
+  for (const service of raw.services) {
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(String(service.id || ''))) {
+      throw new Error(`Invalid service id in registry: ${JSON.stringify(service.id)}`);
+    }
+    if (svcs.has(service.id)) {
+      throw new Error(`Duplicate service id in registry: ${service.id}`);
+    }
+    svcs.set(service.id, service);
+  }
+  const acts = new Map();
+  for (const service of raw.services) {
+    const caps = new Set(service.capabilities || []);
+    if (caps.has('start')) {
+      acts.set(`start-${service.id}`, { id: `start-${service.id}`, label: `Start ${service.name || service.id}`, kind: 'start' });
+    }
+    if (caps.has('stop')) {
+      acts.set(`stop-${service.id}`, { id: `stop-${service.id}`, label: `Stop ${service.name || service.id}`, kind: 'stop' });
+    }
+  }
+  const anyStart = raw.services.some((s) => s.common && (s.capabilities || []).includes('start'));
+  const anyStop = raw.services.some((s) => s.common && (s.capabilities || []).includes('stop'));
+  if (anyStart) acts.set('start-common', { id: 'start-common', label: 'Start common services', kind: 'start' });
+  if (anyStop) acts.set('stop-common', { id: 'stop-common', label: 'Stop common services', kind: 'stop' });
+  return { manifest: raw, services: svcs, actions: acts };
 }
 
-const HOST = manifest.dashboard?.host || '127.0.0.1';
-const PORT = Number(process.env.SERVICEDECK_PORT || manifest.dashboard?.port || 8777);
+let registry = loadRegistry();
+const registryLoadedAt = () => registryLoadedAtValue;
+let registryLoadedAtValue = new Date().toISOString();
+
+// Hot reload: swap the registry when services.json changes on disk. A file
+// that fails validation keeps the previous registry running — a half-saved
+// edit must never take the dashboard down. (Editors that write via rename
+// can drop the watch; re-establish it on error.)
+function watchRegistry() {
+  let timer = null;
+  try {
+    fs.watch(MANIFEST_FILE, () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        try {
+          const next = loadRegistry();
+          registry = next;
+          registryLoadedAtValue = new Date().toISOString();
+          statusCacheAt = 0;
+          console.log(`[deck] registry reloaded: ${next.services.size} services.`);
+        } catch (error) {
+          console.warn(`[deck] registry reload rejected (${error.message}); keeping previous registry.`);
+        }
+      }, 300);
+    });
+  } catch {
+    /* watcher establishment failure is non-fatal */
+  }
+}
+watchRegistry();
+
+const HOST = registry.manifest.dashboard?.host || '127.0.0.1';
+const PORT = Number(process.env.SERVICEDECK_PORT || registry.manifest.dashboard?.port || 8777);
 const ALLOWED_HOSTS = new Set([
   `127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`,
   '127.0.0.1', 'localhost', '[::1]',
@@ -66,34 +127,6 @@ const KILL_ARGS = [
   '-Command',
   '$p = [int]($env:DECK_KILL_PID -as [int]); if ($p -gt 0) { & taskkill.exe /PID $p /T /F | Out-Null }',
 ];
-
-const services = new Map();
-const actions = new Map();
-
-for (const service of manifest.services) {
-  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(String(service.id || ''))) {
-    throw new Error(`Invalid service id in registry: ${JSON.stringify(service.id)}`);
-  }
-  if (services.has(service.id)) {
-    throw new Error(`Duplicate service id in registry: ${service.id}`);
-  }
-  services.set(service.id, service);
-}
-
-// Derive the executable action surface from declared capabilities.
-for (const service of manifest.services) {
-  const caps = new Set(service.capabilities || []);
-  if (caps.has('start')) {
-    actions.set(`start-${service.id}`, { id: `start-${service.id}`, label: `Start ${service.name || service.id}`, kind: 'start' });
-  }
-  if (caps.has('stop')) {
-    actions.set(`stop-${service.id}`, { id: `stop-${service.id}`, label: `Stop ${service.name || service.id}`, kind: 'stop' });
-  }
-}
-const anyCommonStart = manifest.services.some((s) => s.common && (s.capabilities || []).includes('start'));
-const anyCommonStop = manifest.services.some((s) => s.common && (s.capabilities || []).includes('stop'));
-if (anyCommonStart) actions.set('start-common', { id: 'start-common', label: 'Start common services', kind: 'start' });
-if (anyCommonStop) actions.set('stop-common', { id: 'stop-common', label: 'Stop common services', kind: 'stop' });
 
 // File-serving tables: request paths are exact-match lookup KEYS only; the
 // table VALUES are compile-time/boot-time filename constants, so no
@@ -259,7 +292,7 @@ async function getStatus() {
 }
 
 function startOperation(actionId) {
-  const action = actions.get(actionId);
+  const action = registry.actions.get(actionId);
   if (!action) {
     const error = new Error('action is not registered');
     error.statusCode = 404;
@@ -302,7 +335,7 @@ function startOperation(actionId) {
 }
 
 function safeLogFiles(serviceId) {
-  const service = services.get(serviceId);
+  const service = registry.services.get(serviceId);
   if (!service) return [];
   return (service.logs || [])
     .filter((name) => typeof name === 'string' && LOG_NAME_PATTERN.test(name));
@@ -356,13 +389,13 @@ function sendRouteFile(response, filePath, cacheControl) {
 
 async function handleApi(request, response, url) {
   if (url.pathname === '/api/health' && request.method === 'GET') {
-    writeJson(response, 200, { ok: true, host: HOST, port: PORT, version: manifest.version || 1 });
+    writeJson(response, 200, { ok: true, host: HOST, port: PORT, version: registry.manifest.version || 1 });
     return;
   }
   if (url.pathname === '/api/meta' && request.method === 'GET') {
     writeJson(response, 200, {
-      dashboard: manifest.dashboard,
-      services: manifest.services.map((service) => ({
+      dashboard: registry.manifest.dashboard,
+      services: registry.manifest.services.map((service) => ({
         id: service.id,
         name: service.name,
         nameZh: service.nameZh,
@@ -378,7 +411,8 @@ async function handleApi(request, response, url) {
         endpoint: service.endpoint,
         port: service.port,
       })),
-      actions: Array.from(actions.values()),
+      actions: Array.from(registry.actions.values()),
+      registryLoadedAt: registryLoadedAt(),
       server: { host: HOST, port: PORT, startedAt: serverStartedAt },
     });
     return;
@@ -417,7 +451,7 @@ async function handleApi(request, response, url) {
   }
   const logMatch = url.pathname.match(/^\/api\/logs\/([a-z0-9-]+)$/);
   if (logMatch && request.method === 'GET') {
-    const service = services.get(logMatch[1]);
+    const service = registry.services.get(logMatch[1]);
     if (!service) return fail(response, 404, 'service not found');
     const caps = new Set(service.capabilities || []);
     if (!caps.has('logs')) return fail(response, 403, 'this service does not expose logs');
