@@ -24,7 +24,9 @@ the registry schema instead, or fix the entry's JSON.
 | `services.json` | The user's private registry. **Gitignored — never commit, never read secrets from it.** |
 | `public/` | Vanilla frontend (no build, no remote assets, offline-safe). |
 | `scripts/validate-manifest.mjs` | Registry schema validator (CI + local). |
-| `docs/adding-services.md` | Human-facing field reference. Keep in sync with the validator. |
+| `docs/adding-services.md` | Field reference; keep in sync with the validator. |
+| `docs/agents-cookbook.md` | Agent recipes (CLI/TUI, GUI, IDE-hosted) + probe checklist. |
+| `docs/troubleshooting.md` | Symptom-first runbook; read it BEFORE debugging anything. |
 | `start.ps1` | Human launcher (idempotent, opens browser). |
 
 ## Security invariants — weakening any of these blocks the change

@@ -73,7 +73,9 @@ server.js                    # HTTP layer (Node stdlib only)
 manager/service-manager.ps1  # generic lifecycle engine (interprets the registry)
 services.example.json        # schema documentation by example; copied to services.json on first run
 public/                      # vanilla frontend, local icons, offline-safe
-docs/adding-services.md      # how to register a service / agent
+docs/adding-services.md      # how to register a service
+docs/agents-cookbook.md      # agent recipes: CLI/TUI, GUI, and IDE-hosted shapes
+docs/troubleshooting.md      # symptom-first runbook (deck + environment)
 scripts/validate-manifest.mjs# CI + local schema validation
 start.ps1                    # start the dashboard
 ```

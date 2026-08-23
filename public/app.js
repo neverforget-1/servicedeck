@@ -129,7 +129,10 @@ function endpointRows(service, card) {
   if (service.url && service.url !== service.endpoint) endpoints.push({ label: 'UI', value: service.url, iconName: 'panel-top' });
   if (!endpoints.length && service.port) endpoints.push({ label: '端口', value: `127.0.0.1:${service.port}`, iconName: 'server' });
   if (!endpoints.length) {
-    addText(wrap, 'span', '状态展示型条目', 'managed-note');
+    const note = hasCapability(service, 'start')
+      ? '启动后在其自身窗口或终端中运行'
+      : '状态展示型条目';
+    addText(wrap, 'span', note, 'managed-note');
     return;
   }
   endpoints.forEach((endpoint) => {
