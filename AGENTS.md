@@ -96,6 +96,11 @@ CI (`.github/workflows/ci.yml`) runs the same checks on `windows-latest`.
 - **Cold starts are slow.** `readyTimeoutSec` should cover the worst realistic
   first boot (containers, dependency installs). Default 60s is often not
   enough; the example uses generous values on purpose.
+- **Single-element array unrolling.** A PowerShell function returning
+  `@(one_item)` hands the caller a bare object (the pipeline unrolls arrays);
+  under PS 5.1 its `.Count` is `$null`, so "exactly one process found" code
+  paths silently evaluate false. Return `,@($hits)` from helpers and wrap
+  call sites in `@(...)` before counting.
 - **UTF-8 output.** `status-json` must print pure JSON on stdout: the engine
   silences human chatter in machine mode; keep `Write-Host` calls behind the
   machine-mode guard.
