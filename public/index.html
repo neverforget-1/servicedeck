@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101316">
+  <title>ServiceDeck</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Back to ServiceDeck">
+        <span class="brand-mark" data-icon="layers-3"></span>
+        <span class="brand-copy">
+          <strong id="brand-title">ServiceDeck</strong>
+          <small>LOCAL SERVICE DECK</small>
+        </span>
+      </a>
+      <div class="topbar-actions">
+        <span class="local-badge"><span data-icon="shield-check"></span><span data-i18n="localOnly">仅本机</span></span>
+        <span id="connection-state" class="connection-state is-loading"><i></i><span data-i18n="connecting">连接中</span></span>
+        <button class="icon-button" type="button" data-action="refresh" title="刷新状态" aria-label="刷新状态">
+          <span data-icon="refresh-cw"></span>
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero-band" aria-labelledby="page-title">
+        <div class="hero-copy">
+          <p class="eyebrow">OPERATIONS / LOCALHOST</p>
+          <h1 id="page-title"><span data-i18n="heroA">你的本地服务，</span><em data-i18n="heroB">一个面板。</em></h1>
+          <p class="hero-lede" data-i18n="heroLede">把服务、容器和 Agent 工具放在同一个清晰的控制面上：声明式登记、按能力授权。</p>
+          <div class="hero-actions" id="hero-actions">
+            <button class="button button-primary" type="button" data-global-action="start-common">
+              <span data-icon="play"></span><span data-i18n="startCommon">启动常用服务</span>
+            </button>
+            <button class="button button-quiet" type="button" data-global-action="stop-common">
+              <span data-icon="square"></span><span data-i18n="stopCommon">停止常用服务</span>
+            </button>
+          </div>
+        </div>
+        <div class="hero-status" aria-label="服务总览">
+          <div class="hero-status-top">
+            <span class="section-kicker">LIVE OVERVIEW</span>
+            <span id="last-updated" class="muted-text" data-i18n="waitingSync">等待同步</span>
+          </div>
+          <div class="hero-status-number"><strong id="hero-active-count">--</strong><span data-i18n="servicesOnline">个条目在线</span></div>
+          <div class="health-line"><span class="health-line-dot"></span><span id="hero-health-label" data-i18n="readingStatus">正在读取运行状态</span></div>
+          <div class="signal-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        </div>
+      </section>
+
+      <section class="metric-strip" aria-label="概览指标">
+        <div class="metric-cell metric-mint"><span class="metric-icon" data-icon="activity"></span><span><small data-i18n="online">在线条目</small><strong id="metric-online">--</strong></span></div>
+        <div class="metric-cell metric-coral"><span class="metric-icon" data-icon="layers-3"></span><span><small data-i18n="registered">已登记条目</small><strong id="metric-total">--</strong></span></div>
+        <div class="metric-cell metric-violet"><span class="metric-icon" data-icon="terminal"></span><span><small data-i18n="agents">Agent 工具</small><strong id="metric-agents">--</strong></span></div>
+        <div class="metric-cell metric-amber"><span class="metric-icon" data-icon="plug-zap"></span><span><small data-i18n="startable">可启动条目</small><strong id="metric-startable">--</strong></span></div>
+      </section>
+
+      <section class="toolbar" aria-label="服务筛选">
+        <div class="toolbar-title"><span class="section-kicker">SERVICE DECK</span><h2 id="toolbar-heading">服务总览</h2></div>
+        <div class="toolbar-controls">
+          <div class="section-tabs" role="group" aria-label="切换分区">
+            <button type="button" class="is-selected" data-section="services"><span data-i18n="tabServices">服务</span><span class="tab-count" data-tab-count="services">--</span></button>
+            <button type="button" data-section="agents"><span data-i18n="tabAgents">Agent 工具</span><span class="tab-count" data-tab-count="agents">--</span></button>
+          </div>
+          <div class="segmented-control" role="group" aria-label="筛选条目">
+            <button type="button" class="is-selected" data-filter="all" data-i18n="filterAll">全部</button>
+            <button type="button" data-filter="running" data-i18n="filterRunning">运行中</button>
+          </div>
+          <label class="search-box"><span data-icon="search"></span><input id="service-search" type="search" placeholder="搜索" aria-label="搜索"></label>
+        </div>
+      </section>
+
+      <section class="workspace-grid">
+        <div class="service-area">
+          <div id="service-grid" class="service-grid" aria-live="polite"></div>
+          <div id="empty-state" class="empty-state is-hidden"><span data-icon="search-x"></span><strong data-i18n="noMatch">没有匹配的条目</strong><span data-i18n="noMatchHint">换一个筛选条件试试</span></div>
+        </div>
+
+        <aside class="side-stack">
+          <section class="side-panel activity-panel">
+            <div class="panel-heading"><div><span class="section-kicker">ACTIVITY</span><h2 data-i18n="recentOps">最近操作</h2></div><button class="icon-button icon-button-small" type="button" data-action="refresh-activity" title="刷新操作记录" aria-label="刷新操作记录"><span data-icon="rotate-cw"></span></button></div>
+            <div id="activity-list" class="activity-list"><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
+          </section>
+
+          <section class="extension-panel">
+            <div class="extension-mark" data-icon="plug-zap"></div>
+            <div class="extension-copy"><span class="section-kicker">EXTENSION POINT</span><h2 data-i18n="addService">新增服务 / Agent</h2><p data-i18n="addServiceHint">在 services.json 里声明一段配置即可，页面会自动生成卡片。</p></div>
+            <a class="text-link" href="/docs/adding-services.md" target="_blank" rel="noreferrer"><span data-i18n="openDocs">打开登记手册</span> <span data-icon="arrow-up-right"></span></a>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <footer class="footer-bar"><span>SERVICEDECK <i></i> 127.0.0.1</span><a href="/docs/adding-services.md" target="_blank" rel="noreferrer" data-i18n="docsLink">登记手册</a></footer>
+  </div>
+
+  <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+
+  <dialog id="logs-dialog" class="logs-dialog">
+    <div class="dialog-heading"><div><span class="section-kicker">SERVICE LOG</span><h2 id="logs-title" data-i18n="logsTitle">运行日志</h2></div><button class="icon-button" type="button" data-action="close-dialog" title="关闭" aria-label="关闭"><span data-icon="x"></span></button></div>
+    <div id="logs-content" class="logs-content"><div class="log-loading" data-i18n="loadingLogs">正在读取日志…</div></div>
+  </dialog>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

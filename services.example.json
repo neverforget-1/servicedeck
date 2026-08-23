@@ -1,0 +1,133 @@
+{
+  "_readme": [
+    "ServiceDeck service registry (schema version 2).",
+    "Copy this file to services.json and edit it for your machine.",
+    "services.json is gitignored so your personal setup never leaves this computer.",
+    "See docs/adding-services.md for the full field reference."
+  ],
+  "version": 2,
+  "dashboard": {
+    "title": "ServiceDeck",
+    "subtitle": "Local Service Deck",
+    "port": 8777,
+    "host": "127.0.0.1"
+  },
+  "services": [
+    {
+      "id": "demo-api",
+      "name": "Demo API",
+      "nameZh": "演示服务",
+      "section": "services",
+      "group": "Examples",
+      "description": "A zero-dependency HTTP endpoint (node one-liner) so you can verify the whole start/stop/health pipeline works on your machine.",
+      "icon": "sparkles",
+      "accent": "#5eead4",
+      "kind": "process",
+      "capabilities": ["start", "stop", "logs"],
+      "common": true,
+      "url": "http://127.0.0.1:9111",
+      "port": 9111,
+      "start": {
+        "exe": "node",
+        "args": [
+          "-e",
+          "require('http').createServer((q,s)=>{s.setHeader('content-type','text/plain');s.end('demo-ok')}).listen(9111,'127.0.0.1')"
+        ],
+        "cwd": ".",
+        "readyTimeoutSec": 30
+      },
+      "health": {
+        "type": "http",
+        "url": "http://127.0.0.1:9111"
+      },
+      "stop": {
+        "matchCommandLine": "node.+listen\\(9111",
+        "expectName": "node.exe"
+      },
+      "logs": ["demo-api.stdout.log", "demo-api.stderr.log"]
+    },
+    {
+      "id": "example-agent",
+      "name": "Example Agent CLI",
+      "nameZh": "示例 Agent 工具",
+      "section": "agents",
+      "group": "Agents",
+      "description": "Agent harnesses live on the Agents tab. This placeholder shows the launch-only contract: the deck may start it and show its status, nothing else — no stop button, no log access, no other permissions.",
+      "icon": "terminal",
+      "accent": "#a78bfa",
+      "kind": "process",
+      "capabilities": ["start"],
+      "url": "http://127.0.0.1:9112",
+      "port": 9112,
+      "start": {
+        "exe": "node",
+        "args": [
+          "-e",
+          "require('http').createServer((q,s)=>{s.setHeader('content-type','text/plain');s.end('agent-ui-placeholder')}).listen(9112,'127.0.0.1')"
+        ],
+        "cwd": ".",
+        "readyTimeoutSec": 30
+      },
+      "health": {
+        "type": "http",
+        "url": "http://127.0.0.1:9112"
+      },
+      "stop": {
+        "matchCommandLine": "node.+listen\\(9112",
+        "expectName": "node.exe"
+      },
+      "logs": []
+    },
+    {
+      "id": "example-compose",
+      "name": "Example Compose Stack",
+      "nameZh": "示例容器编排",
+      "section": "services",
+      "group": "Examples",
+      "description": "Template for docker-compose based services. Fill in composeFiles / envFile pointing at your own project. The deck runs 'docker compose up -d' to start and 'docker compose stop' to stop — data volumes are preserved.",
+      "icon": "server",
+      "accent": "#60a5fa",
+      "kind": "docker-compose",
+      "capabilities": ["start", "stop", "logs"],
+      "enabled": false,
+      "composeFiles": ["C:/path/to/your/docker-compose.yml"],
+      "envFile": "C:/path/to/your/.env",
+      "health": {
+        "type": "http",
+        "url": "http://127.0.0.1:8080/health",
+        "readyTimeoutSec": 90
+      },
+      "url": "http://127.0.0.1:8080",
+      "port": 8080,
+      "logs": ["example-compose.stdout.log", "example-compose.stderr.log"]
+    },
+    {
+      "id": "example-tunnel",
+      "name": "Example SSH Tunnel",
+      "nameZh": "示例 SSH 隧道",
+      "section": "services",
+      "group": "Examples",
+      "description": "Template for forwarding a remote port to localhost over SSH. Fill in host, keyPath and ports. The engine recycles stale tunnel processes that hold the port without forwarding.",
+      "icon": "radio-tower",
+      "accent": "#fb7185",
+      "kind": "ssh-tunnel",
+      "capabilities": ["start", "stop", "logs"],
+      "enabled": false,
+      "ssh": {
+        "host": "user@example.com",
+        "keyPath": "${USERPROFILE}/.ssh/id_ed25519",
+        "localPort": 16080,
+        "remoteHost": "127.0.0.1",
+        "remotePort": 6080
+      },
+      "health": {
+        "type": "port",
+        "port": 16080,
+        "readyTimeoutSec": 30
+      },
+      "url": "http://127.0.0.1:16080/",
+      "port": 16080,
+      "logs": ["example-tunnel.stdout.log", "example-tunnel.stderr.log"]
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Syntax check
+        run: |
+          node --check server.js
+          node --check public/app.js
+
+      - name: Validate example manifest
+        run: node scripts/validate-manifest.mjs services.example.json
+
+      - name: Boot smoke test
+        shell: powershell
+        run: |
+          $env:SERVICEDECK_PORT = '8791'
+          $proc = Start-Process -FilePath node -ArgumentList @('server.js') -WorkingDirectory $PWD -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput smoke-stdout.log -RedirectStandardError smoke-stderr.log
+          try {
+            $deadline = (Get-Date).AddSeconds(30)
+            $healthy = $false
+            while ((Get-Date) -lt $deadline) {
+              try {
+                $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8791/api/health' -TimeoutSec 2
+                if ($response.StatusCode -eq 200) { $healthy = $true; break }
+              } catch { Start-Sleep -Milliseconds 500 }
+            }
+            if (-not $healthy) {
+              Get-Content smoke-stderr.log -ErrorAction SilentlyContinue
+              throw 'dashboard did not become healthy'
+            }
+            # Foreign Origin must be rejected (CSRF guard).
+            $meta = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8791/api/meta' -TimeoutSec 5
+            if ($meta.StatusCode -ne 200) { throw 'api/meta failed' }
+            # services.json should have been bootstrapped from the example
+            if (-not (Test-Path 'services.json')) { throw 'first-run bootstrap did not create services.json' }
+          }
+          finally {
+            if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+          }

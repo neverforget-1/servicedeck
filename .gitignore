@@ -1,0 +1,19 @@
+# Personal configuration — never commit your real service registry.
+services.json
+config.local.*
+
+# Runtime artifacts
+logs/
+*.pid
+state.json
+*.log
+
+# Local security-scanner session artifacts
+.mimosa/
+
+# OS / editor noise
+Thumbs.db
+.DS_Store
+*.swp
+.idea/
+.vscode/
