@@ -122,10 +122,73 @@ function Test-Enabled {
 function Test-HttpQuiet {
     param([string]$Uri)
     try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri $Uri -TimeoutSec 2
-        return ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500)
+        # Proxy = $null: health targets are local; routing loopback probes
+        # through a system proxy adds latency and false negatives.
+        $request = [System.Net.HttpWebRequest]::Create($Uri)
+        $request.Proxy = $null
+        $request.Timeout = 1500
+        $request.AllowAutoRedirect = $false
+        try {
+            $response = $request.GetResponse()
+            $code = [int]$response.StatusCode
+            $response.Close()
+        }
+        catch [System.Net.WebException] {
+            if (-not $_.Exception.Response) { return $false }
+            $code = [int]$_.Exception.Response.StatusCode
+            $_.Exception.Response.Close()
+        }
+        return ($code -ge 200 -and $code -lt 500)
     }
     catch { return $false }
+}
+
+# Probe many URLs concurrently. On machines where a refused loopback
+# connection costs ~2s (security-suite WFP drivers do this), sequential
+# HTTP probes make status-json cost the SUM of all dead probes. One
+# shared async flight bounds the batch at roughly the slowest probe.
+function Get-HttpProbeResults {
+    param([string[]]$Urls, [int]$TimeoutMs = 2500)
+
+    $results = @{}
+    $inFlight = @()
+    foreach ($url in $Urls) {
+        $results[$url] = $false
+        try {
+            $request = [System.Net.HttpWebRequest]::Create($url)
+            $request.Proxy = $null
+            $request.Timeout = $TimeoutMs
+            $request.AllowAutoRedirect = $false
+            $inFlight += , @($url, $request, $request.BeginGetResponse($null, $null))
+        }
+        catch { }
+    }
+
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs + 500)
+    foreach ($item in $inFlight) {
+        $url = $item[0]; $request = $item[1]; $async = $item[2]
+        $remaining = [int]($deadline - [DateTime]::UtcNow).TotalMilliseconds
+        if ($remaining -lt 0) { $remaining = 0 }
+        if (-not $async.AsyncWaitHandle.WaitOne($remaining)) {
+            try { $request.Abort() } catch { }
+            continue
+        }
+        try {
+            $response = $request.EndGetResponse($async)
+            $code = [int]$response.StatusCode
+            $response.Close()
+            $results[$url] = ($code -ge 200 -and $code -lt 500)
+        }
+        catch [System.Net.WebException] {
+            if ($_.Exception.Response) {
+                $code = [int]$_.Exception.Response.StatusCode
+                $_.Exception.Response.Close()
+                $results[$url] = ($code -ge 200 -and $code -lt 500)
+            }
+        }
+        catch { }
+    }
+    return $results
 }
 
 function Test-PortListening {
@@ -134,15 +197,21 @@ function Test-PortListening {
 }
 
 # Probe a service according to its health block. Returns $true when healthy.
+# $HttpResults (optional) supplies precomputed url->bool results so batch
+# callers probe every URL in one concurrent flight instead of sequentially.
 function Test-ServiceHealth {
-    param($Spec)
+    param($Spec, $HttpResults)
     $health = $Spec.health
     if (-not $health -or -not $health.type) {
         if ($Spec.port) { return Test-PortListening ([int]$Spec.port) }
         return $false
     }
     switch ([string]$health.type) {
-        'http'    { return Test-HttpQuiet ([string](Expand-DeckPath $health.url)) }
+        'http' {
+            $url = [string](Expand-DeckPath $health.url)
+            if ($HttpResults -and $HttpResults.ContainsKey($url)) { return [bool]$HttpResults[$url] }
+            return Test-HttpQuiet $url
+        }
         'port'    { return Test-PortListening ([int]$health.port) }
         'process' { return (@(Get-ProcessesByPattern ([string]$health.matchCommandLine) $health.expectName)).Count -gt 0 }
         default   { return Test-PortListening ([int]$Spec.port) }
@@ -176,10 +245,17 @@ function Stop-ProcessTree {
 # Find live processes matching a command-line regex (and optional process
 # image name). Verification is by command line so the engine never touches a
 # process it cannot attribute to a service.
+# Per-invocation process snapshot cache: status/probe actions probe many
+# entries against the same process table; enumerating Win32_Process once
+# per entry (0.5-1.5s each) made status-json take 5-10s with a handful of
+# process-probe entries. Set by Get-StatusJson/Get-ProbeReport; callers
+# outside those actions enumerate fresh.
+$Script:ProcessSnapshotCache = $null
+
 function Get-ProcessesByPattern {
     param([string]$Pattern, [string]$ExpectName)
     if (-not $Pattern) { return @() }
-    $snapshot = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    $snapshot = if ($null -ne $Script:ProcessSnapshotCache) { $Script:ProcessSnapshotCache } else { @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue) }
     # Plain return: the pipeline unrolls the array, so EVERY caller must
     # collect with @(...). Counting directly on the call result breaks in
     # PS 5.1 for single hits (bare object, .Count is $null), and -NoEnumerate
@@ -488,21 +564,37 @@ function Stop-ServiceById {
 # ---------------------------------------------------------------- status
 
 function Get-StatusJson {
-    $states = [ordered]@{}
-    foreach ($spec in @($Manifest.services)) {
-        if (-not (Test-Enabled $spec)) {
-            $states[$spec.id] = [ordered]@{ state = 'disabled' }
-            continue
+    $Script:ProcessSnapshotCache = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    try {
+        # One concurrent HTTP flight for all http-health entries.
+        $httpUrls = @()
+        foreach ($spec in @($Manifest.services)) {
+            if ($spec.health -and [string]$spec.health.type -eq 'http' -and $spec.health.url) {
+                $url = [string](Expand-DeckPath $spec.health.url)
+                if ($httpUrls -notcontains $url) { $httpUrls += $url }
+            }
         }
-        $state = if (Test-ServiceHealth $spec) { 'ready' } else { 'stopped' }
-        $entry = [ordered]@{ state = $state }
-        if ($spec.port) { $entry.port = [int]$spec.port }
-        $states[$spec.id] = $entry
+        $httpResults = Get-HttpProbeResults $httpUrls
+
+        $states = [ordered]@{}
+        foreach ($spec in @($Manifest.services)) {
+            if (-not (Test-Enabled $spec)) {
+                $states[$spec.id] = [ordered]@{ state = 'disabled' }
+                continue
+            }
+            $state = if (Test-ServiceHealth $spec $httpResults) { 'ready' } else { 'stopped' }
+            $entry = [ordered]@{ state = $state }
+            if ($spec.port) { $entry.port = [int]$spec.port }
+            $states[$spec.id] = $entry
+        }
+        [ordered]@{
+            generatedAt = (Get-Date).ToString('o')
+            services    = $states
+        } | ConvertTo-Json -Depth 5 -Compress
     }
-    [ordered]@{
-        generatedAt = (Get-Date).ToString('o')
-        services    = $states
-    } | ConvertTo-Json -Depth 5 -Compress
+    finally {
+        $Script:ProcessSnapshotCache = $null
+    }
 }
 
 # ---------------------------------------------------------------- probe report
@@ -513,7 +605,9 @@ function Get-StatusJson {
 # visible — the "Claude Code is claude.exe, not node.exe" lesson in
 # machine-readable form. CLI-only; the dashboard never invokes it.
 function Get-ProbeReport {
-    $entries = @()
+    $Script:ProcessSnapshotCache = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    try {
+        $entries = @()
     foreach ($spec in @($Manifest.services)) {
         $notes = @()
         $probe = [ordered]@{
@@ -550,6 +644,10 @@ function Get-ProbeReport {
         generatedAt = (Get-Date).ToString('o')
         entries     = $entries
     } | ConvertTo-Json -Depth 6
+    }
+    finally {
+        $Script:ProcessSnapshotCache = $null
+    }
 }
 
 # ---------------------------------------------------------------- dispatch

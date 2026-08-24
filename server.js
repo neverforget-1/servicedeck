@@ -334,6 +334,141 @@ function startOperation(actionId) {
   return operation;
 }
 
+// ---------------------------------------------------------------- watchdog
+//
+// Opt-in per entry: "watchdog": { "enabled": true, ... }. The loop revives
+// entries that WERE ready and then died — it never starts entries that were
+// never up (that is boot-autostart, a different feature), never touches
+// disabled entries, and requires the start capability.
+//
+// Restart policy: exponential backoff (backoffBaseSec * 2^(attempt-1),
+// capped); an attempt counts as failed until the service stays ready for
+// minUptimeSec; after maxAttempts consecutive failures the entry is marked
+// gave-up and left alone until a human starts it (which resets the state).
+// Never enable this on interactive agents — a window the user closed on
+// purpose must stay closed.
+
+const WATCHDOG_DEFAULTS = {
+  minUptimeSec: 60,
+  maxAttempts: 3,
+  backoffBaseSec: 30,
+  backoffCapSec: 600,
+};
+const watchdogIntervalSec = Math.max(
+  5,
+  Number(process.env.SERVICEDECK_WATCHDOG_INTERVAL || registry.manifest.watchdog?.intervalSec || 30)
+);
+
+const watchdogState = {
+  lastSeen: new Map(), // id -> 'ready' | 'stopped' (previous tick)
+  memory: new Map(),   // id -> { attempts, gaveUp, nextRetryAt, readyAt, seenReady, lastDeathAt }
+  busy: false,
+};
+
+function watchdogSpec(service) {
+  const w = service.watchdog;
+  if (!w || !w.enabled) return null;
+  if (!registry.actions.has(`start-${service.id}`)) return null;
+  return { ...WATCHDOG_DEFAULTS, ...w };
+}
+
+function resetWatchdog(serviceId) {
+  watchdogState.memory.delete(serviceId);
+}
+
+function watchdogView(serviceId) {
+  const mem = watchdogState.memory.get(serviceId);
+  if (!mem) return null;
+  return {
+    attempts: mem.attempts,
+    gaveUp: mem.gaveUp,
+    nextRetryAt: mem.nextRetryAt ? new Date(mem.nextRetryAt).toISOString() : null,
+  };
+}
+
+async function watchdogTick() {
+  if (watchdogState.busy || activeOperation) return;
+  watchdogState.busy = true;
+  try {
+    const result = await runManager('status-json');
+    if (result.code !== 0) return;
+    const status = JSON.parse(result.stdout);
+    if (!status || !status.services) return;
+    const now = Date.now();
+    for (const service of registry.manifest.services) {
+      const spec = watchdogSpec(service);
+      if (!spec) continue;
+      const live = status.services[service.id];
+      if (!live || live.state === 'disabled') continue;
+
+      const mem = watchdogState.memory.get(service.id)
+        || { attempts: 0, gaveUp: false, nextRetryAt: 0, readyAt: 0, seenReady: false, lastDeathAt: 0, pendingDeath: false };
+      const previous = watchdogState.lastSeen.get(service.id);
+
+      if (live.state === 'ready') {
+        mem.pendingDeath = false;
+        if (!mem.readyAt) mem.readyAt = now;
+        mem.seenReady = true;
+        if ((mem.attempts > 0 || mem.gaveUp) && now - mem.readyAt >= spec.minUptimeSec * 1000) {
+          // stable long enough — forgive past failures
+          mem.attempts = 0;
+          mem.gaveUp = false;
+          mem.nextRetryAt = 0;
+        }
+      }
+      else if (previous === 'ready' && mem.seenReady) {
+        // death transition: record it; the restart decision below is
+        // re-evaluated every tick until it fires, so a death that lands
+        // inside a backoff window is never lost (the first version only
+        // handled the transition once and could strand the breaker).
+        mem.readyAt = 0;
+        mem.pendingDeath = true;
+        mem.lastDeathAt = now;
+      }
+
+      if (live.state !== 'ready' && mem.pendingDeath && !mem.gaveUp && now >= mem.nextRetryAt) {
+        mem.attempts += 1;
+        if (mem.attempts > spec.maxAttempts) {
+          mem.gaveUp = true;
+          mem.pendingDeath = false;
+          console.warn(`[deck] watchdog: giving up on '${service.id}' after ${mem.attempts - 1} attempts; start it manually to re-arm.`);
+        }
+        else {
+          const backoffMs = Math.min(spec.backoffBaseSec * 2 ** (mem.attempts - 1), spec.backoffCapSec) * 1000;
+          mem.nextRetryAt = now + backoffMs;
+          mem.pendingDeath = false;
+          console.log(`[deck] watchdog: restarting '${service.id}' (attempt ${mem.attempts}/${spec.maxAttempts}).`);
+          try {
+            startOperation(`start-${service.id}`);
+          }
+          catch (error) {
+            if (error.statusCode === 409) {
+              // operation lock busy (user action in flight): undo the
+              // attempt and retry on a later tick
+              mem.attempts -= 1;
+              mem.nextRetryAt = 0;
+              mem.pendingDeath = true;
+            }
+            else {
+              throw error;
+            }
+          }
+        }
+      }
+      watchdogState.memory.set(service.id, mem);
+      watchdogState.lastSeen.set(service.id, live.state);
+    }
+  }
+  catch (error) {
+    console.warn(`[deck] watchdog tick failed: ${error.message}`);
+  }
+  finally {
+    watchdogState.busy = false;
+  }
+}
+
+setInterval(watchdogTick, watchdogIntervalSec * 1000);
+
 function safeLogFiles(serviceId) {
   const service = registry.services.get(serviceId);
   if (!service) return [];
@@ -407,6 +542,7 @@ async function handleApi(request, response, url) {
         kind: service.kind,
         capabilities: service.capabilities || [],
         common: Boolean(service.common),
+        watchdog: Boolean(service.watchdog && service.watchdog.enabled),
         url: service.url,
         endpoint: service.endpoint,
         port: service.port,
@@ -419,7 +555,15 @@ async function handleApi(request, response, url) {
   }
   if (url.pathname === '/api/status' && request.method === 'GET') {
     try {
-      writeJson(response, 200, await getStatus());
+      const payload = await getStatus();
+      // Augment the manager payload with server-side watchdog state.
+      for (const service of registry.manifest.services) {
+        const view = watchdogView(service.id);
+        if (view) {
+          payload.services[service.id] = { ...(payload.services[service.id] || {}), watchdog: view };
+        }
+      }
+      writeJson(response, 200, payload);
     } catch (error) {
       fail(response, 502, 'unable to read service status', error.message);
     }
@@ -443,6 +587,9 @@ async function handleApi(request, response, url) {
   if (actionMatch && request.method === 'POST') {
     try {
       const operation = startOperation(actionMatch[1]);
+      // A manual start re-arms the watchdog for that entry (a human has
+      // looked at it; past failures are forgiven).
+      if (actionMatch[1].startsWith('start-')) resetWatchdog(actionMatch[1].slice('start-'.length));
       writeJson(response, 202, operationView(operation));
     } catch (error) {
       fail(response, error.statusCode || 500, error.message, error.operationId ? { operationId: error.operationId } : undefined);

@@ -100,7 +100,7 @@ PRs welcome — see the roadmap below for good first issues.
 
 ## Roadmap
 
-- [ ] Watchdog mode: auto-restart crashed services with backoff
+- [x] Watchdog mode: auto-restart crashed services with backoff (v0.2, opt-in per entry, circuit breaker included)
 - [ ] WebSocket live status (drop the 2.5s polling)
 - [ ] Agent harness catalog: curated registry snippets for popular CLI agents
 - [ ] Linux/macOS manager adapter (`sh` implementation of the same action contract)

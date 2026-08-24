@@ -44,6 +44,7 @@
         "matchCommandLine": "node.+listen\\(9111",
         "expectName": "node.exe"
       },
+      "watchdog": { "enabled": true, "minUptimeSec": 5, "backoffBaseSec": 10 },
       "logs": ["demo-api.stdout.log", "demo-api.stderr.log"]
     },
     {

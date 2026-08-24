@@ -195,6 +195,7 @@ function renderServices() {
     } else {
       addText(tags, 'span', service.common ? '常用' : '按需', 'service-kind');
     }
+    if (service.watchdog) addText(tags, 'span', '看护', 'service-kind');
     heading.appendChild(tags);
     addText(heading, 'h3', service.nameZh || service.name || service.id, 'service-name');
     top.appendChild(heading);
@@ -213,7 +214,14 @@ function renderServices() {
     const dot = document.createElement('span');
     dot.className = 'state-dot';
     stateLabel.appendChild(dot);
-    addText(stateLabel, 'span', current === 'ready' ? '就绪，可访问' : current === 'disabled' ? '清单中已停用' : '尚未启动', 'state-text');
+    const wdView = (((state.status || {}).services || {})[service.id] || {}).watchdog;
+    let stateTextValue;
+    if (current === 'ready') stateTextValue = wdView && wdView.attempts > 0 ? `看护拉起后运行中（第 ${wdView.attempts} 次）` : '就绪，可访问';
+    else if (current === 'disabled') stateTextValue = '清单中已停用';
+    else if (wdView && wdView.gaveUp) stateTextValue = '看护已熔断，请手动启动排查';
+    else if (wdView && wdView.attempts > 0) stateTextValue = `看护退避中（已试 ${wdView.attempts} 次）`;
+    else stateTextValue = '尚未启动';
+    addText(stateLabel, 'span', stateTextValue, 'state-text');
     bottom.appendChild(stateLabel);
 
     const actions = document.createElement('div');

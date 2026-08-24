@@ -154,6 +154,11 @@ workspace.*
 
 ## What the deck deliberately does NOT do for agents
 
+- **No watchdog.** Watchdog revives things that *were running and died* —
+  for interactive agents that is exactly wrong: a terminal or window the
+  user closed is not a crash, and resurrecting it would fight the user.
+  Keep `"watchdog"` off every agents-section entry; it is for unattended
+  background services only.
 - **No stop** — agents own their sessions and lifecycles; force-killing a
   coding agent mid-task is how work gets lost. The engine and API both
   refuse `stop-<id>` for launch-only entries even under direct API calls.

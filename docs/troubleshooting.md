@@ -193,6 +193,24 @@ render duplicate submit controls (in-form + sticky bar). When a click
 action, and a covering modal (`aria-modal` confirmation dialog) is often
 the real reason a click timed out.
 
+## 14. Service keeps restarting / card says "看护已熔断"
+
+**Root cause:** watchdog is doing its job on a genuinely broken service.
+The card shows `看护退避中（已试 N 次）` while backing off, and
+`看护已熔断，请手动启动排查` after `maxAttempts` consecutive failures
+(default 3). The circuit breaker exists so a crash-looping service cannot
+monopolize the operation lock.
+
+**Diagnosis:** read the service's own logs (`logs\<id>.stderr.log`) for
+the crash reason; `GET /api/status` exposes per-entry
+`watchdog: {attempts, gaveUp, nextRetryAt}`.
+
+**Fix:** repair the service, start it manually (a manual start re-arms
+and forgives the watchdog state), and confirm it stays ready past
+`minUptimeSec`. Note the watchdog only revives entries that were ready
+first — a service that was never up is never auto-started (that is
+boot-autostart, not watchdog).
+
 ---
 
 ## Bug-class summary (the two Laws of PowerShell 5.1 arrays)

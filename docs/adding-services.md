@@ -36,6 +36,7 @@ Everything ServiceDeck can start, stop, probe, or display lives in `services.jso
 | `capabilities` | Subset of `start`, `stop`, `logs`. Controls both the UI buttons and what the API/engine accept. `external` entries typically declare `[]` or `["logs"]`. |
 | `common` | Included in the `start-common` / `stop-common` bulk actions. |
 | `enabled` | `false` disables the entry without deleting it (shows as "未启用", refuses to start). |
+| `watchdog` | Opt-in crash revival: `{"enabled": true, "minUptimeSec": 60, "maxAttempts": 3, "backoffBaseSec": 30, "backoffCapSec": 600}` (only `enabled` required). The deck revives entries that **were ready and then died** — never ones that were never started. First revival is immediate; further failures back off exponentially (base × 2^n, capped); an entry that stays ready for `minUptimeSec` forgives its history; after `maxAttempts` consecutive failures the watchdog trips (熔断) and leaves the entry alone until a manual start re-arms it. Requires the `start` capability. **Never enable on interactive agents** — a window the user closed must stay closed. The global check interval defaults to 30s (`watchdog.intervalSec` in the manifest, or `SERVICEDECK_WATCHDOG_INTERVAL`; minimum 5s). |
 | `start` / `health` / `stop` / `logs` | Kind-specific blocks, documented below. |
 
 `${ENVIRONMENT_VARIABLE}` placeholders are expanded in every path (plus `${SD_HOME}` = the deck root), so the registry you keep for yourself never hard-codes machine-specific absolute paths.

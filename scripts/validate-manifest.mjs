@@ -53,6 +53,18 @@ for (const service of manifest.services || []) {
   if (service.start && service.start.window !== undefined && !['hidden', 'visible'].includes(service.start.window)) {
     problems.push(`${label}: start.window must be "hidden" or "visible"`);
   }
+  if (service.watchdog) {
+    const w = service.watchdog;
+    if (typeof w.enabled !== 'boolean') problems.push(`${label}: watchdog.enabled must be a boolean`);
+    for (const key of ['minUptimeSec', 'maxAttempts', 'backoffBaseSec', 'backoffCapSec']) {
+      if (w[key] !== undefined && !(Number.isInteger(w[key]) && w[key] > 0)) {
+        problems.push(`${label}: watchdog.${key} must be a positive integer`);
+      }
+    }
+    if (w.enabled && !(service.capabilities || []).includes('start')) {
+      problems.push(`${label}: watchdog requires the start capability`);
+    }
+  }
   if (service.start && service.start.readyTimeoutSec !== undefined && !(Number.isInteger(service.start.readyTimeoutSec) && service.start.readyTimeoutSec > 0)) {
     problems.push(`${label}: start.readyTimeoutSec must be a positive integer`);
   }
